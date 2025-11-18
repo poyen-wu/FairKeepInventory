@@ -1,0 +1,9 @@
+# Default configuration for FairKeepInventory
+# Currently no tunable options. This file exists to allow saveDefaultConfig() to copy it to the plugin data folder.
+# You can add settings here later as needed.
+
+# Example placeholders (not used yet):
+# timers:
+#   base-seconds: 3600
+# penalties:
+#   death-seconds: 300

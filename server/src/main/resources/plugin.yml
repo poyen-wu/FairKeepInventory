@@ -1,0 +1,29 @@
+name: FairKeepInventory
+main: com.fairkeepinventory.FairKeepInventoryPlugin
+version: 1.0.0
+api-version: '1.21'
+author: FKI
+load: POSTWORLD
+commands:
+  fki:
+    description: Admin tools for FairKeepInventory
+    aliases: [fairkeepinv, fairkeepinventory]
+    usage: |-
+      /fki owner get [handHolder]
+      /fki owner set [handHolder] [owner]
+      /fki owner clear [handHolder]
+      /fki timer get [handHolder]
+      /fki timer set <time>|[handHolder] <time> [timerOwner]
+      /fki timer clear [handHolder]
+      /fki penalty get [player]
+      /fki penalty set <time>|<player> <time> [player]
+      /fki penalty clear [player]
+      /fki repeat get [player]
+      /fki repeat clear [player]
+      /fki rebuild player [player]
+    permission: fairkeepinventory.admin
+    permission-message: You don't have permission.
+permissions:
+  fairkeepinventory.admin:
+    description: Allows using FairKeepInventory admin commands
+    default: op
