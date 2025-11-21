@@ -13,6 +13,7 @@ import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.BiPredicate;
+import java.util.function.Function;
 
 /**
  * A Map that:
@@ -24,7 +25,7 @@ import java.util.function.BiPredicate;
  */
 public final class StableOrderingMap<K, V> extends AbstractMap<K, V> {
 
-    private final Comparator<? super K> orderComparator;
+    private Comparator<? super K> orderComparator;
     private final BiPredicate<? super K, ? super K> equalsPredicate;
 
     private final List<Entry<K, V>> entries = new ArrayList<>();
@@ -59,6 +60,19 @@ public final class StableOrderingMap<K, V> extends AbstractMap<K, V> {
             this.value = newValue;
             return old;
         }
+    }
+
+    public void setOrderComparator(Comparator<? super K> newComparator) {
+        this.orderComparator = Objects.requireNonNull(newComparator, "orderComparator");
+
+        // Re-sort entries according to the new comparator.
+        // List.sort is stable, so for keys where compare(a,b)==0, the
+        // existing relative order is preserved.
+        entries.sort((e1, e2) -> this.orderComparator.compare(e1.getKey(), e2.getKey()));
+    }
+
+    public Comparator<? super K> getOrderComparator() {
+        return orderComparator;
     }
 
     private int indexOfKey(Object keyObj) {
@@ -212,5 +226,87 @@ public final class StableOrderingMap<K, V> extends AbstractMap<K, V> {
                 return entries.size();
             }
         };
+    }
+
+    // ==========================
+    // Serialization / Deserialization
+    // ==========================
+
+    /**
+     * Serialize this map to a string.
+     *
+     * Format: entry1;entry2;...
+     * Each entry: keyStr=valStr
+     *
+     * The key/value serializers must ensure that their output
+     * does not contain ';' or '=' or handle escaping themselves.
+     */
+    public String serialize(
+            Function<? super K, String> keySerializer,
+            Function<? super V, String> valueSerializer
+    ) {
+        Objects.requireNonNull(keySerializer, "keySerializer");
+        Objects.requireNonNull(valueSerializer, "valueSerializer");
+
+        StringBuilder sb = new StringBuilder();
+        boolean first = true;
+
+        for (Entry<K, V> e : entries) {
+            if (!first) {
+                sb.append(";");
+            }
+            first = false;
+
+            String k = keySerializer.apply(e.getKey());
+            String v = valueSerializer.apply(e.getValue());
+
+            sb.append(k).append("=").append(v);
+        }
+
+        return sb.toString();
+    }
+
+    /**
+     * Deserialize a map from a string produced by serialize().
+     *
+     * For the deserialized map:
+     *  - orderComparator is always (a, b) -> 0 (pure insertion order).
+     *  - equalsPredicate is always K::equals (implemented via Objects::equals).
+     */
+    public static <K, V> StableOrderingMap<K, V> deserialize(
+            String data,
+            Function<String, K> keyDeserializer,
+            Function<String, V> valueDeserializer
+    ) {
+        Objects.requireNonNull(keyDeserializer, "keyDeserializer");
+        Objects.requireNonNull(valueDeserializer, "valueDeserializer");
+
+        StableOrderingMap<K, V> map =
+                new StableOrderingMap<>((a, b) -> 0, Objects::equals);
+
+        if (data == null || data.isEmpty()) {
+            return map;
+        }
+
+        String[] entryParts = data.split(";");
+        for (String part : entryParts) {
+            if (part.isEmpty()) {
+                continue;
+            }
+            int eq = part.indexOf('=');
+            if (eq < 0) {
+                continue; // or throw IllegalArgumentException
+            }
+
+            String keyStr = part.substring(0, eq);
+            String valStr = part.substring(eq + 1);
+
+            K key = keyDeserializer.apply(keyStr);
+            V value = valueDeserializer.apply(valStr);
+
+            map.put(key, value);
+        }
+
+        return map;
     }
 }

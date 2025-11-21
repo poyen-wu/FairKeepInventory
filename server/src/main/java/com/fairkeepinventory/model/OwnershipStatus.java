@@ -1,4 +1,4 @@
-package com.fairkeepinventory;
+package com.fairkeepinventory.model;
 
 import java.util.Comparator;
 import java.util.Objects;
@@ -35,6 +35,14 @@ public class OwnershipStatus {
         @Override
         public int hashCode() {
             return Objects.hash(playerId, remainingSeconds);
+        }
+
+        @Override
+        public String toString() {
+            return "Timer{" +
+                "playerId=" + playerId +
+                ", remainingSeconds=" + remainingSeconds +
+                '}';
         }
     }
 
@@ -124,11 +132,15 @@ public class OwnershipStatus {
         return owner.isPresent();
     }
 
+    public boolean isOwnedBy(UUID playerId) {
+        return this.isOwned() && this.getOwnerUuid().get().equals(playerId);
+    }
+
     public boolean isTimered() {
         return timer.isPresent();
     }
 
-    public static Comparator<OwnershipStatus> playerOrder(UUID playerId) {
+    public static Comparator<OwnershipStatus> playerDropOrder(UUID playerId) {
         return Comparator
             // Drop other's items first, then own
             .comparingInt((OwnershipStatus status) ->
@@ -149,7 +161,11 @@ public class OwnershipStatus {
             );
     }
 
-    public static Comparator<OwnershipStatus> sharedOrder() {
+    public static Comparator<OwnershipStatus> playerTakeOrder(UUID playerId) {
+        return playerDropOrder(playerId).reversed();
+    }
+
+    public static Comparator<OwnershipStatus> sharedDropOrder() {
         return Comparator
             // Owned vs unowned first
             .comparing(
@@ -165,6 +181,10 @@ public class OwnershipStatus {
             );
     }
 
+    public static Comparator<OwnershipStatus> sharedTakeOrder() {
+        return sharedDropOrder().reversed();
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
@@ -177,5 +197,111 @@ public class OwnershipStatus {
     @Override
     public int hashCode() {
         return Objects.hash(owner, timer);
+    }
+
+    @Override
+    public String toString() {
+        if (isEmpty()) {
+            return "OwnershipStatus{empty}";
+        }
+
+        if (isOwned() && !isTimered()) {
+            return "OwnershipStatus{owner=" + owner.get() + "}";
+        }
+
+        if (!isOwned() && isTimered()) {
+            Timer t = timer.get();
+            return "OwnershipStatus{timerOwner=" + t.getPlayerId() +
+                ", remainingSeconds=" + t.getRemainingSeconds() +
+                "}";
+        }
+
+        // claimingOwned case: both owner and timer present
+        Timer t = timer.get();
+        return "OwnershipStatus{owner=" + owner.get() +
+            ", claimer=" + t.getPlayerId() +
+            ", remainingSeconds=" + t.getRemainingSeconds() +
+            "}";
+    }
+
+    // ---------------------------
+    // Serialization / Deserialization
+    // ---------------------------
+
+    /**
+     * Serialize this OwnershipStatus to a compact string.
+     *
+     * Formats:
+     *   E
+     *   O|ownerUuid
+     *   T|claimerUuid|remainingSeconds
+     *   C|ownerUuid|claimerUuid|remainingSeconds
+     */
+    public String serialize() {
+        if (isEmpty()) {
+            return "E";
+        }
+
+        if (isOwned() && !isTimered()) {
+            // owned
+            return "O|" + owner.get();
+        }
+
+        Timer t = timer.get();
+        if (!isOwned() && isTimered()) {
+            // timered
+            return "T|" + t.getPlayerId() + "|" + t.getRemainingSeconds();
+        }
+
+        // claimingOwned: both owner and timer present
+        return "C|" + owner.get() + "|" + t.getPlayerId() + "|" + t.getRemainingSeconds();
+    }
+
+    /**
+     * Deserialize a string produced by serialize().
+     */
+    public static OwnershipStatus deserialize(String data) {
+        if (data == null || data.isEmpty()) {
+            throw new IllegalArgumentException("OwnershipStatus string is null/empty");
+        }
+
+        String[] parts = data.split("\\|");
+        String kind = parts[0];
+
+        switch (kind) {
+            case "E":
+                if (parts.length != 1) {
+                    throw new IllegalArgumentException("Invalid EMPTY OwnershipStatus: " + data);
+                }
+                return OwnershipStatus.empty();
+
+            case "O":
+                if (parts.length != 2) {
+                    throw new IllegalArgumentException("Invalid OWNED OwnershipStatus: " + data);
+                }
+                return OwnershipStatus.owned(UUID.fromString(parts[1]));
+
+            case "T":
+                if (parts.length != 3) {
+                    throw new IllegalArgumentException("Invalid TIMERED OwnershipStatus: " + data);
+                }
+                return OwnershipStatus.timered(
+                    UUID.fromString(parts[1]),
+                    Integer.parseInt(parts[2])
+                );
+
+            case "C":
+                if (parts.length != 4) {
+                    throw new IllegalArgumentException("Invalid CLAIMING_OWNED OwnershipStatus: " + data);
+                }
+                return OwnershipStatus.claimingOwned(
+                    UUID.fromString(parts[1]),
+                    UUID.fromString(parts[2]),
+                    Integer.parseInt(parts[3])
+                );
+
+            default:
+                throw new IllegalArgumentException("Unknown OwnershipStatus kind: " + kind);
+        }
     }
 }
