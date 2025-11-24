@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.BiFunction;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 
@@ -295,6 +296,18 @@ public class OwnershipTable {
         }
     }
 
+    public void syncItemUpdate(Inventory inventory, ItemStack original, ItemStack updated) {
+        var inventoryMap = table.get(InventoryId.from(inventory));
+        if (inventoryMap == null) {
+            return;
+        }
+        ItemStack originalKey = original.asOne();
+        ItemStack updatedKey = updated.asOne();
+        var records = inventoryMap.get(originalKey);
+        inventoryMap.remove(originalKey);
+        inventoryMap.put(updatedKey, records);
+    }
+
     /**
      * Sync "items gained" for a given stack in an inventory.
      *
@@ -496,8 +509,8 @@ public class OwnershipTable {
             return addedItems;
         }
 
-        Bukkit.getLogger().info("syncItemGet amount: " + amount);
-        Bukkit.getLogger().info("syncItemGet ownership: " + ownership);
+        // Bukkit.getLogger().info("syncItemGet amount: " + amount);
+        // Bukkit.getLogger().info("syncItemGet ownership: " + ownership);
         // Do NOT touch any existing ownership buckets (including empty/new) other than
         // merging into the explicitly provided `ownership` bucket.
         syncItemGet(inventory, key, ownership, amount, takeOrder);
@@ -651,6 +664,9 @@ public class OwnershipTable {
         StableOrderingMap<OwnershipStatus, Integer> records =
                 byItemStack.computeIfAbsent(key,
                         k -> new StableOrderingMap<>(comparator, OwnershipStatus::equals));
+
+        // Always update the comparator, even if the map already existed
+        records.setOrderComparator(comparator);
 
         // Merge with existing amount for this ownership, if present.
         records.merge(ownership, amount, Integer::sum);
@@ -1031,8 +1047,8 @@ public class OwnershipTable {
         int trackedSrc = sumTracked.apply(srcRecords);
         int trackedDst = sumTracked.apply(dstRecords);
 
-        Bukkit.getLogger().info("Tracked in src: " + trackedSrc + ", actual in src: " + actualSrc);
-        Bukkit.getLogger().info("Tracked in dst: " + trackedDst + ", actual in dst: " + actualDst);
+        // Bukkit.getLogger().info("Tracked in src: " + trackedSrc + ", actual in src: " + actualSrc);
+        // Bukkit.getLogger().info("Tracked in dst: " + trackedDst + ", actual in dst: " + actualDst);
 
         // If neither side is tracked, just track both inventories
         if (!srcTracked && !dstTracked) {
@@ -1175,24 +1191,36 @@ public class OwnershipTable {
     }
 
     public void tickPlayerInventory(int seconds) {
-        tickInventory(seconds, invId ->
-                invId instanceof InventoryId.PlayerInventoryId playerInvId
-                        && ((InventoryId.PlayerInventoryId.Id) playerInvId.id).inventoryType == InventoryType.PLAYER
+        tickInventory(
+                seconds,
+                invId ->
+                        invId instanceof InventoryId.PlayerInventoryId playerInvId
+                                && ((InventoryId.PlayerInventoryId.Id) playerInvId.id).inventoryType == InventoryType.PLAYER
+                                && Optional.ofNullable(Bukkit.getPlayer(playerInvId.getPlayerId())).map(Player::isOnline).orElse(false),
+                this::reInitInPlayerInventory
         );
     }
 
     public void tickEnderChestInventory(int seconds) {
-        tickInventory(seconds, invId ->
-                invId instanceof InventoryId.PlayerInventoryId playerInvId
-                        && ((InventoryId.PlayerInventoryId.Id) playerInvId.id).inventoryType == InventoryType.ENDER_CHEST
+        tickInventory(
+                seconds,
+                invId ->
+                        invId instanceof InventoryId.PlayerInventoryId playerInvId
+                                && ((InventoryId.PlayerInventoryId.Id) playerInvId.id).inventoryType == InventoryType.ENDER_CHEST,
+                this::reInitInPlayerInventory
         );
     }
 
     /**
-     * Generic inventory ticking logic. The predicate controls *which*
-     * inventories are ticked (by InventoryId only).
+     * Generic inventory ticking logic with a pre-tick transform.
+     * The predicate controls *which* inventories are ticked (by InventoryId only),
+     * and the transformer can rewrite OwnershipStatus before ticking.
      */
-    public void tickInventory(int seconds, Predicate<InventoryId> shouldTick) {
+    public void tickInventory(
+            int seconds,
+            Predicate<InventoryId> shouldTick,
+            BiFunction<InventoryId, OwnershipStatus, OwnershipStatus> preTickTransform
+    ) {
         if (seconds <= 0) {
             return;
         }
@@ -1223,7 +1251,12 @@ public class OwnershipTable {
                     OwnershipStatus oldStatus = e.getKey();
                     int amount = e.getValue();
 
-                    OwnershipStatus newStatus = oldStatus.tickTimer(seconds);
+                    // First, allow the caller to transform "empty" statuses, etc.
+                    OwnershipStatus transformed =
+                            preTickTransform.apply(invId, oldStatus);
+
+                    // Then apply the timer tick
+                    OwnershipStatus newStatus = transformed.tickTimer(seconds);
                     updated.add(new AbstractMap.SimpleEntry<>(newStatus, amount));
                 }
 
@@ -1238,6 +1271,35 @@ public class OwnershipTable {
                 }
             }
         }
+    }
+
+    private OwnershipStatus reInitInPlayerInventory(InventoryId invId, OwnershipStatus status) {
+        // Only care about player inventories
+        if (!(invId instanceof InventoryId.PlayerInventoryId playerInvId)) {
+            return status;
+        }
+        UUID playerId = playerInvId.getPlayerId();
+
+        if (status.isOwnedBy(playerId)) {
+            return status;
+        }
+        if (status.isOwned() && !status.isTimered()) {
+            return OwnershipStatus.claimingOwned(status.getOwnerUuid().get(), playerId);
+        }
+        if (status.isOwned() && status.isTimered() && status.getTimer().get().getPlayerId() != playerId) {
+            return OwnershipStatus.claimingOwned(status.getOwnerUuid().get(), playerId);
+        }
+        if (status.isEmpty()) {
+            return OwnershipStatus.timered(playerId);
+        }
+        if (status.isTimered() && status.getTimer().get().getPlayerId() == playerId) {
+            return status;
+        }
+        if (status.isTimered() && status.getTimer().get().getPlayerId() != playerId) {
+            return OwnershipStatus.timered(playerId);
+        }
+
+        return OwnershipStatus.timered(playerId);
     }
 
     // ---------------------------------------------------

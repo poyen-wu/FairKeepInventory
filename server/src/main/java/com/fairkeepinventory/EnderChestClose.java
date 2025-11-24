@@ -38,7 +38,7 @@ public class EnderChestClose implements Listener {
                     Instant.now())
                 .minusSeconds(600)
                 .isPositive()) {
-                table.tickInventory(600, inv -> inv.getInventory().equals(inventory));
+                table.tickInventory(600, inv -> inv.equals(InventoryId.from(inventory)), (inventoryId, status) -> status);
             }
         }
     }

@@ -32,6 +32,10 @@ public abstract class InventoryId {
                 this.uuid = uuid;
             }
 
+            public UUID getUuid() {
+                return this.uuid;
+            }
+
             @Override
             public boolean equals(Object o) {
                 if (this == o) return true;
@@ -115,6 +119,10 @@ public abstract class InventoryId {
 
         public InventoryType getInventoryType() {
             return ((Id) super.id).inventoryType;
+        }
+
+        public UUID getPlayerId() {
+            return this.getUuid();
         }
 
         @Override
